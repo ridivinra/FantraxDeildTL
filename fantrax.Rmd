@@ -1,0 +1,100 @@
+---
+title: "Fantrax - Umferð 13"
+author: "Árni"
+date: "11/28/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(readxl)
+```
+
+# Staðan  
+
+```{r}
+games <- read_excel(path = "fantrax.xlsx", sheet = "Games")
+teams <- read_excel(path = "fantrax.xlsx", sheet = "Teams")
+
+games <- games %>% mutate(
+  HomeTeamPoints = case_when(HomeTeamScore>AwayTeamScore ~ 3, 
+                                            HomeTeamScore == AwayTeamScore ~ 1,
+                                            T ~ 0),
+  AwayTeamPoints = case_when(HomeTeamScore<AwayTeamScore ~ 3, 
+                                            HomeTeamScore == AwayTeamScore ~ 1,
+                                            T ~ 0),
+)
+
+dt_scores <- bind_rows(
+          games %>% select(Umferd,TeamID = HomeTeamID, 
+                                        Score = HomeTeamScore, Points = HomeTeamPoints),
+          games %>% select(Umferd,TeamID = AwayTeamID, 
+                                        Score = AwayTeamScore, Points = AwayTeamPoints)
+)
+dt_scores <- dt_scores %>% left_join(teams)
+dt_scores %>% group_by(TeamName) %>% 
+  summarise(totalPoints = sum(Points), totalScore = sum(Score, na.rm = T)) %>% 
+  arrange(desc(totalPoints), desc(totalScore))
+```
+
+```{r}
+library(dplyr)
+dt_scores %>% arrange(TeamID, Umferd) %>% group_by(TeamID) %>% 
+  mutate(sumScore = cumsum(Score), sumPoints = cumsum(Points)) %>% filter(!is.na(Score)) %>% 
+  ggplot(aes(Umferd, sumPoints, col = TeamName)) + geom_line() + 
+  scale_x_continuous(name = "Umferð", breaks = seq(1,15,1)) + facet_wrap(~TeamName)
+plotly::ggplotly(dt_scores %>% arrange(TeamID, Umferd) %>% group_by(TeamID) %>% 
+  mutate(sumScore = cumsum(Score), sumPoints = cumsum(Points)) %>% filter(!is.na(Score)) %>% 
+  ggplot(aes(Umferd, sumScore, col = TeamName)) + geom_line() + 
+  scale_x_continuous(name = "Umferð", breaks = seq(1,15,1)))
+```
+
+
+```{r}
+games_all <- games %>% select(Umferd, HomeTeamID, AwayTeamID) %>% filter(Umferd < 10)
+
+simulateGames <- function(games_all, teams, sim){
+  games <- games_all %>% 
+    left_join(select(teams,HomeTeamIDReal = TeamID, randIndx), by = c("HomeTeamID" = "randIndx")) %>%
+    left_join(select(teams,AwayTeamIDReal = TeamID, randIndx), by = c("AwayTeamID" = "randIndx")) %>%
+    mutate(sim = sim)
+  rest <- games[1:20,]
+  rest$Umferd <- rep(c(10,11,12,13), each = 5)
+  games <- bind_rows(games, rest)
+  return(games)
+}
+M = 5000
+all_simulations <- data.frame()
+for(i in 1:M){
+  set.seed(i)
+  teams$randIndx <- sample(1:10,10)
+  games <- simulateGames(games_all = games_all, teams = teams, sim = i)
+  games <- games %>% left_join(select(dt_scores, HomeScore = Score, Umferd, TeamID,HomeName = TeamName), 
+                      by = c("HomeTeamIDReal" = "TeamID","Umferd")) %>%
+    left_join(select(dt_scores, AwayScore = Score, Umferd, TeamID,AwayName = TeamName), 
+              by = c("AwayTeamIDReal" = "TeamID","Umferd")) %>% 
+    mutate(HomePoints = case_when(HomeScore > AwayScore ~ 3, T ~0),
+           AwayPoints = case_when(AwayScore > HomeScore ~ 3, T ~0))
+  all_simulations <- bind_rows(all_simulations, games)
+}
+
+all_scores <- bind_rows(all_simulations %>% 
+            select(Umferd,sim, TeamID = HomeTeamIDReal, Name = HomeName, Score = HomeScore, Points = HomePoints),
+          all_simulations %>% 
+            select(Umferd,sim, TeamID = AwayTeamIDReal, Name = AwayName, Score = AwayScore, Points = AwayPoints))
+
+teams_sim <- all_scores %>% group_by(sim, TeamID, Name) %>% 
+  summarise(totalPoints = sum(Points), totalScore = sum(Score)) %>% 
+  arrange(sim, desc(totalPoints), desc(totalScore))
+
+teams_sim$saeti <- rep(1:10, M)
+teams_sim %>% group_by(TeamID,Name, saeti) %>% summarise(hlutf = n()/M, fjoldi = n())
+teams_sim %>% group_by(TeamID,Name, saeti) %>% summarise(hlutf = n()/M, fjoldi = n()) %>% 
+  ggplot(aes(factor(saeti), hlutf)) + 
+  geom_bar(stat = "identity") + 
+  scale_y_continuous(labels = scales::percent, name = "Hlutfall skipta í hverju sæti") + 
+  scale_x_discrete(name = "Sæti í ThugLife deild") +
+  facet_wrap(~Name, ncol = 2) + theme_bw()
+```
+
